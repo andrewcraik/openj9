@@ -2182,67 +2182,136 @@ TR_J9InlinerPolicy::inlineMethodEvenForColdBlocks(TR_ResolvedMethod *method)
    return insideForEach;
    }
 
+bool
+TR_J9InlinerPolicy::skipFaninDueToConstraints(TR_CallSite *callSite, TR::ResolvedMethodSymbol *calleeSymbol)
+   {
+   static char *enableSkipFaninDueToConstraints = feGetEnv("TR_enableSkipFaninDueToConstraints");
+   if (enableSkipFaninDueToConstraints == NULL)
+      return false;
+
+   if (comp()->trace(OMR::inlining))
+      traceMsg(comp(), "SKIP FANIN: checking constraints to see if we want to adjust for fanin\n");
+   TR_ResolvedMethod *callee = calleeSymbol->getResolvedMethod();
+   TR_ResolvedMethod *caller = callSite->_callerResolvedMethod;
+   TR_PrexArgInfo *argInfo = callSite->_ecsPrexArgInfo;
+   if (argInfo && comp()->usesPreexistence())
+      {
+      traceMsg(comp(), "SKIP FANIN: found argInfo with %d args\n", argInfo->getNumArgs());
+      int32_t formalArgStart = callSite->isIndirectCall() ? 1 : 0;
+      for (int32_t i = formalArgStart; i < argInfo->getNumArgs(); ++i)
+         {
+         TR_PrexArgument *argPrexInfo = argInfo->get(i);
+         if (argPrexInfo)
+            {
+            switch (TR_PrexArgument::knowledgeLevel(argPrexInfo))
+               {
+               // a known object constraint is very powerful - don't do fan-in if we have one of these
+               case KNOWN_OBJECT:
+                  traceMsg(comp(), "SKIP FANIN: return true - found known object at %d\n", i);
+                  TR::DebugCounter::incStaticDebugCounter(comp(), TR::DebugCounter::debugCounterName(comp(), "inliner.prexFaninCutoff/knownObject/%s/(%s)/%d:%d", comp()->getHotnessName(comp()->getMethodHotness()), comp()->signature(), callSite->_bcInfo.getCallerIndex(), callSite->_bcInfo.getByteCodeIndex()));
+                  return true;
+               // check if the fixed class we have is more precise than the declared type - if so don't do fan-in
+               case FIXED_CLASS:
+                    traceMsg(comp(), "SKIP FANIN: found fixed class constraint at %d - checking for refinement\n", i);
+                    TR_OpaqueClassBlock *clazz = argPrexInfo->usedProfiledInfo() ? argPrexInfo->getFixedProfiledClass() : argPrexInfo->getClass();
+                    if (comp()->fej9()->isClassFinal(clazz))
+                       {
+                       traceMsg(comp(), "SKIP FANIN: return true - found final fixed class at %d\n", i);
+                          TR::DebugCounter::incStaticDebugCounter(comp(), TR::DebugCounter::debugCounterName(comp(), "inliner.prexFaninCutoff/finalClass/%s/(%s)/%d:%d", comp()->getHotnessName(comp()->getMethodHotness()), comp()->signature(), callSite->_bcInfo.getCallerIndex(), callSite->_bcInfo.getByteCodeIndex()));
+                       return true;
+                       }
+
+                    ListIterator<TR::ParameterSymbol> parms(&(calleeSymbol->getParameterList()));
+                    TR::ParameterSymbol *p = parms.getFirst();
+                    for (int j = 1; j <= i; ++j) { p = parms.getNext(); }
+                    int32_t len = 0;
+                    const char *sig = p->getTypeSignature(len);
+                    if (*sig == 'L')
+                       {
+                       TR_OpaqueClassBlock *declClazz = comp()->fe()->getClassFromSignature(sig, len, callee);
+                       //   int32_t clazzLen = 0;
+                       //   char *clazzSig = TR::Compiler->cls.classNameChars(comp(), clazz, clazzLen);
+                       //   printf("here! %s %.*s %.*s\n", comp()->signature(), len, sig, clazzLen, clazzSig);
+                       if (clazz != declClazz)
+                          {
+                          traceMsg(comp(), "SKIP FANIN: return true - found refined fixed class at %d\n", i);
+                          TR::DebugCounter::incStaticDebugCounter(comp(), TR::DebugCounter::debugCounterName(comp(), "inliner.prexFaninCutoff/fixedClass/%s/(%s)/%d:%d", comp()->getHotnessName(comp()->getMethodHotness()), comp()->signature(), callSite->_bcInfo.getCallerIndex(), callSite->_bcInfo.getByteCodeIndex()));
+                          return true;
+                          }
+                       }
+               }
+            }
+         }
+      }
+   return false;
+   }
+
 void
 TR_J9InlinerPolicy::adjustFanInSizeInWeighCallSite(int32_t& weight,
                                                 int32_t size,
-                                                TR_ResolvedMethod* callee,
-                                                TR_ResolvedMethod* caller,
-                                                int32_t bcIndex)
+                                                TR_CallSite *callSite,
+                                                TR_CallTarget *callTarget)
    {
-      /*
-      Our goal is to use the ratio of the weight of a particular caller to the total weight to penalize the callers whose weights are relatively small.
-      To reach that goal, we have to introduce two magic numbers: defaultWeight and TR::Options::INLINE_fanInCallGraphFactor.
-         *defaultWeight is used when our caller belongs in the other bucket, so we don't have a meaningful weight to represent it.
-         *INLINE_fanInCallGraphFactor is simply hand-tuned number by which we multiply our ratio.
+   TR_ResolvedMethod *callee = callTarget->_calleeSymbol->getResolvedMethod();
+   TR_ResolvedMethod *caller = callSite->_callerResolvedMethod;
+   int32_t bcIndex = callSite->_callNode->getByteCodeIndex();
+   TR::Node *callNode = callSite->_callNode;
+   /*
+   Our goal is to use the ratio of the weight of a particular caller to the total weight to penalize the callers whose weights are relatively small.
+   To reach that goal, we have to introduce two magic numbers: defaultWeight and TR::Options::INLINE_fanInCallGraphFactor.
+      *defaultWeight is used when our caller belongs in the other bucket, so we don't have a meaningful weight to represent it.
+      *INLINE_fanInCallGraphFactor is simply hand-tuned number by which we multiply our ratio.
 
-      INLINE_fanInCallGraphFactor is an integer number divided by 100. This allows us to avoid using float numbers for specifying the factor.
-      */
+   INLINE_fanInCallGraphFactor is an integer number divided by 100. This allows us to avoid using float numbers for specifying the factor.
+   */
+   if (comp()->getMethodHotness() > warm)
+      return;
 
+   static const char *qq = feGetEnv("TR_Min_FanIn_Size");
+   static const uint32_t min_size = ( qq ) ? atoi(qq) : MIN_FAN_IN_SIZE;
 
+   uint32_t thresholdSize = (!comp()->getOption(TR_InlinerFanInUseCalculatedSize)) ? getJ9InitialBytecodeSize(callee, 0, comp()) : size;
+   if (thresholdSize <= min_size)  // if we are less than min_fan_in size, we don't want to apply fan-in heuristic
+      {
+      return;
+      }
 
-      if (comp()->getMethodHotness() > warm)
+   static const char *qqq = feGetEnv("TR_OtherBucketThreshold");
+   static const float otherBucketThreshold = (qqq) ? (float)  (atoi (qqq) /100.0) : FANIN_OTHER_BUCKET_THRESHOLD ;
+
+   //convenience
+   TR_OpaqueMethodBlock* j9methodCallee = callee->getPersistentIdentifier();
+
+   uint32_t numCallers = 0, totalWeight = 0, fanInWeight = 0;
+   comp()->fej9()->getNumberofCallersAndTotalWeight(j9methodCallee,&numCallers,&totalWeight);
+
+   if (numCallers < MIN_NUM_CALLERS || (totalWeight > 0 && comp()->fej9()->getOtherBucketWeight(j9methodCallee)*1.0 / totalWeight < otherBucketThreshold))
+      return;
+
+   bool hasCaller = comp()->fej9()->getCallerWeight(j9methodCallee,caller->getPersistentIdentifier(), &fanInWeight, bcIndex);
+
+   if (size >= 0 && totalWeight && fanInWeight)
+      {
+      if (skipFaninDueToConstraints(callSite, callTarget->_calleeSymbol))
          return;
 
-      static const char *qq = feGetEnv("TR_Min_FanIn_Size");
-      static const uint32_t min_size = ( qq ) ? atoi(qq) : MIN_FAN_IN_SIZE;
+      static const char *q4 = feGetEnv("TR_MagicNumber");
+      static const int32_t magicNumber = q4 ? atoi (q4) : 1 ;
 
-      uint32_t thresholdSize = (!comp()->getOption(TR_InlinerFanInUseCalculatedSize)) ? getJ9InitialBytecodeSize(callee, 0, comp()) : size;
-      if (thresholdSize <= min_size)  // if we are less than min_fan_in size, we don't want to apply fan-in heuristic
-         {
-         return;
-         }
+      float dynamicFanInRatio = hasCaller ? ((float)totalWeight - (float)fanInWeight) / (float) totalWeight : (float) fanInWeight / (float) totalWeight;
 
-      static const char *qqq = feGetEnv("TR_OtherBucketThreshold");
-      static const float otherBucketThreshold = (qqq) ? (float)  (atoi (qqq) /100.0) : FANIN_OTHER_BUCKET_THRESHOLD ;
+      int32_t oldWeight = weight;
+      weight += weight*dynamicFanInRatio*magicNumber;
 
-      //convenience
-      TR_OpaqueMethodBlock* j9methodCallee = callee->getPersistentIdentifier();
+      TR::DebugCounter::incStaticDebugCounter(comp(), TR::DebugCounter::debugCounterName(comp(), "inliner.prexFaninAdjust/%s/(%s)/(%s)/(%s)/%d:%d", comp()->getHotnessName(comp()->getMethodHotness()), comp()->signature(), caller->signature(comp()->trMemory()), callee->signature(comp()->trMemory()), callNode->getByteCodeInfo().getCallerIndex(), callNode->getByteCodeInfo().getByteCodeIndex()));
 
-      uint32_t numCallers = 0, totalWeight = 0, fanInWeight = 0;
-      comp()->fej9()->getNumberofCallersAndTotalWeight(j9methodCallee,&numCallers,&totalWeight);
+      heuristicTrace (tracer(), "FANIN: callee %s in caller %s @ %d oldWeight %d weight %d",
+         callee->signature(comp()->trMemory()),
+         caller->signature(comp()->trMemory()),
+         bcIndex, oldWeight, weight
+      );
 
-      if (numCallers < MIN_NUM_CALLERS || (totalWeight > 0 && comp()->fej9()->getOtherBucketWeight(j9methodCallee)*1.0 / totalWeight < otherBucketThreshold))
-         return;
-
-      bool hasCaller = comp()->fej9()->getCallerWeight(j9methodCallee,caller->getPersistentIdentifier(), &fanInWeight, bcIndex);
-
-      if (size >= 0 && totalWeight && fanInWeight)
-         {
-         static const char *q4 = feGetEnv("TR_MagicNumber");
-         static const int32_t magicNumber = q4 ? atoi (q4) : 1 ;
-
-         float dynamicFanInRatio = hasCaller ? ((float)totalWeight - (float)fanInWeight) / (float) totalWeight : (float) fanInWeight / (float) totalWeight;
-
-         int32_t oldWeight = weight;
-         weight += weight*dynamicFanInRatio*magicNumber;
-
-         heuristicTrace (tracer(), "FANIN: callee %s in caller %s @ %d oldWeight %d weight %d",
-            callee->signature(comp()->trMemory()),
-            caller->signature(comp()->trMemory()),
-            bcIndex, oldWeight, weight
-         );
-
-         }
+      }
    }
 
 bool TR_J9InlinerPolicy::_tryToGenerateILForMethod (TR::ResolvedMethodSymbol* calleeSymbol, TR::ResolvedMethodSymbol* callerSymbol, TR_CallTarget* calltarget)
@@ -2307,9 +2376,10 @@ bool
 TR_J9InlinerPolicy::adjustFanInSizeInExceedsSizeThreshold(int bytecodeSize,
                                                       uint32_t& calculatedSize,
                                                       TR_ResolvedMethod* callee,
-                                                      TR_ResolvedMethod* caller,
+                                                      TR_CallSite *callSite,
                                                       int32_t bcIndex)
    {
+   TR_ResolvedMethod *caller = callSite->_callerResolvedMethod;
      if (comp()->getMethodHotness() > warm)
          return false;
 
@@ -2343,6 +2413,9 @@ TR_J9InlinerPolicy::adjustFanInSizeInExceedsSizeThreshold(int bytecodeSize,
    uint32_t weight = 0;
    bool hasCaller = comp()->fej9()->getCallerWeight(j9methodCallee,caller->getPersistentIdentifier(), &weight, bcIndex);
 
+   if (skipFaninDueToConstraints(callSite, TR::ResolvedMethodSymbol::create(comp()->trHeapMemory(), callee, comp())))
+      return false;
+
    /*
     * We assume that if the caller lands in the other bucket it is not worth trouble inlining
     * There seem to be an empirical evidence to that.
@@ -2352,7 +2425,7 @@ TR_J9InlinerPolicy::adjustFanInSizeInExceedsSizeThreshold(int bytecodeSize,
     * a lot of infrequent caller-bcIndex pairs
    */
 
-   if (!hasCaller && weight != ~0) //the caller is in the other bucket
+   if (false && !hasCaller && weight != ~0) //the caller is in the other bucket
       {
       heuristicTrace (tracer(), "FANIN: callee %s in caller %s @ %d exceeds thresholds due to the caller being in the other bucket",
             callee->signature(comp()->trMemory()),
@@ -3626,7 +3699,9 @@ void TR_MultipleCallTargetInliner::weighCallSite( TR_CallStack * callStack , TR_
             {
             if (isWarm(comp()))
                {
-               if (comp()->isServerInlining())
+               TR_J9InlinerPolicy *j9InlinerPolicy = (TR_J9InlinerPolicy *)getPolicy();
+               if (comp()->isServerInlining()
+                   && !j9InlinerPolicy->skipFaninDueToConstraints(callsite, calltarget->_calleeSymbol))
                   {
                   if (callsite->_callNode->getInlinedSiteIndex() < 0) //Ensures setWarmCallGraphTooBig is only called for methods with inline index -1 (indexes >=0 can happen when inliner is called after inlining has already occured
                      comp()->getCurrentMethod()->setWarmCallGraphTooBig (callsite->_callNode->getByteCodeInfo().getByteCodeIndex(), comp());
@@ -3859,7 +3934,9 @@ void TR_MultipleCallTargetInliner::weighCallSite( TR_CallStack * callStack , TR_
             {
             if (isWarm(comp()))
                {
-               if (comp()->isServerInlining())
+               TR_J9InlinerPolicy *j9InlinerPolicy = (TR_J9InlinerPolicy *)getPolicy();
+               if (comp()->isServerInlining()
+                   && !j9InlinerPolicy->skipFaninDueToConstraints(callsite, calltarget->_calleeSymbol))
                   {
                   if (callsite->_callNode->getInlinedSiteIndex() < 0) //Ensures setWarmCallGraphTooBig is only called for methods with inline index -1 (indexes >=0 can happen when inliner is called after inlining has already occured
                      comp()->getCurrentMethod()->setWarmCallGraphTooBig (callsite->_callNode->getByteCodeInfo().getByteCodeIndex(), comp());
@@ -3892,11 +3969,11 @@ void TR_MultipleCallTargetInliner::weighCallSite( TR_CallStack * callStack , TR_
 
       if (!comp()->getOption(TR_DisableInlinerFanIn))
          {
-         j9inlinerPolicy->adjustFanInSizeInWeighCallSite (weight,
-                                         size,
+         j9inlinerPolicy->adjustFanInSizeInWeighCallSite (weight, size, callsite, calltarget);
+                                         /*size,
                                          calltarget->_calleeSymbol->getResolvedMethod(),
                                          callsite->_callerResolvedMethod,
-                                         callsite->_callNode->getByteCodeIndex());
+                                         callsite->_callNode->getByteCodeIndex());*/
          }
 
       if (callStack->_inALoop)
@@ -4416,7 +4493,7 @@ TR_MultipleCallTargetInliner::exceedsSizeThreshold(TR_CallSite *callSite, int by
    if (!comp()->getOption(TR_DisableInlinerFanIn))  // TODO: make the default for everybody
       {
       // In JIT, having low caller information is equivallent to lack of information.  We want to exclude only cases where we know we have alot of fan-in
-      if (j9InlinerPolicy->adjustFanInSizeInExceedsSizeThreshold(bytecodeSize, calculatedSize, calleeResolvedMethod, callerResolvedMethod, bcInfo.getByteCodeIndex()))
+      if (j9InlinerPolicy->adjustFanInSizeInExceedsSizeThreshold(bytecodeSize, calculatedSize, calleeResolvedMethod, callSite, bcInfo.getByteCodeIndex()))
          {
          return true;
          }
@@ -4438,6 +4515,10 @@ TR_MultipleCallTargetInliner::exceedsSizeThreshold(TR_CallSite *callSite, int by
       heuristicTrace(tracer(),"### Exceeds Size Threshold because call is cold and has a bytecodeSize %d > _methodInColdBlockByteCodeSizeThreshold %d", bytecodeSize,_methodInColdBlockByteCodeSizeThreshold);
       return true; // exceeds size threshold
       }
+
+   bool skipFanin = j9InlinerPolicy->skipFaninDueToConstraints(callSite, TR::ResolvedMethodSymbol::create(comp()->trHeapMemory(), calleeResolvedMethod, comp()));
+   if (skipFanin)
+      bytecodeSize /= 2;
 
    if(bytecodeSize > _methodInWarmBlockByteCodeSizeThreshold || calculatedSize > _methodInWarmBlockByteCodeSizeThreshold*multiplier)
       {
@@ -4480,6 +4561,7 @@ TR_MultipleCallTargetInliner::exceedsSizeThreshold(TR_CallSite *callSite, int by
          }
       else if (comp()->isServerInlining() &&
             !alwaysWorthInlining(calleeResolvedMethod, NULL) &&
+            !skipFanin &&
             callerResolvedMethod->isWarmCallGraphTooBig(bcInfo.getByteCodeIndex(), comp()) &&
             !isHot(comp()))
          {
@@ -5231,14 +5313,27 @@ void TR_PrexArgInfo::propagateReceiverInfoIfAvailable (TR::ResolvedMethodSymbol*
       return;
    //TR_ASSERT(numOfArgs > 0, "argsinfo index out of bounds");
 
-   TR::Node* child = callNode->getChild(callNode->getFirstArgumentIndex());
+   for (int i = callNode->getFirstArgumentIndex(); i < callNode->getNumChildren(); i++)
+      {
+      TR::Node* child = callNode->getChild(i);
+      if (TR_PrexArgInfo::hasArgInfoForChild(child, argInfo))
+         {
+         heuristicTrace(tracer, "ARGS PROPAGATION: the receiver for callsite %p is also one of the caller's args", callsite);
+
+         if (!callsite->_ecsPrexArgInfo)
+            callsite->_ecsPrexArgInfo = new (tracer->trHeapMemory()) TR_PrexArgInfo(numOfArgs, tracer->trMemory());
+
+         callsite->_ecsPrexArgInfo->set(i - callNode->getFirstArgumentIndex(), TR_PrexArgInfo::getArgForChild(child, argInfo));
+         }
+      }
+   /*TR::Node* child = callNode->getChild(callNode->getFirstArgumentIndex());
 
    if (TR_PrexArgInfo::hasArgInfoForChild(child, argInfo))
       {
       heuristicTrace(tracer, "ARGS PROPAGATION: the receiver for callsite %p is also one of the caller's args", callsite);
       callsite->_ecsPrexArgInfo = new (tracer->trHeapMemory()) TR_PrexArgInfo(numOfArgs, tracer->trMemory());
       callsite->_ecsPrexArgInfo->set(0, TR_PrexArgInfo::getArgForChild(child, argInfo));
-      }
+      }*/
    }
 
 bool TR_PrexArgInfo::validateAndPropagateArgsFromCalleeSymbol(TR_PrexArgInfo* argsFromSymbol, TR_PrexArgInfo* argsFromTarget, TR_InlinerTracer *tracer)
@@ -5798,8 +5893,15 @@ bool
 TR_J9InlinerUtil::addTargetIfMethodIsNotOverridenInReceiversHierarchy(TR_IndirectCallSite *callsite)
    {
    TR_PersistentCHTable *chTable = comp()->getPersistentInfo()->getPersistentCHTable();
+   TR_ResolvedMethod *refinedMethod = callsite->_initialCalleeMethod;
+   if (callsite->_receiverClass)
+      {
+      TR_OpaqueMethodBlock *found = comp()->fej9()->getResolvedVirtualMethod(callsite->_receiverClass, callsite->_vftSlot);
+      if (found)
+         refinedMethod = comp()->fej9()->createResolvedMethod(comp()->trMemory(), found);
+      }
 
-   if( !chTable->isOverriddenInThisHierarchy(callsite->_initialCalleeMethod, callsite->_receiverClass, callsite->_vftSlot, comp()) &&
+   if( !chTable->isOverriddenInThisHierarchy(refinedMethod, callsite->_receiverClass, callsite->_vftSlot, comp()) &&
        !comp()->getOption(TR_DisableHierarchyInlining))
       {
       if(comp()->trace(OMR::inlining))
@@ -5809,18 +5911,18 @@ TR_J9InlinerUtil::addTargetIfMethodIsNotOverridenInReceiversHierarchy(TR_Indirec
          if(!isClassObsolete)
             {
             char *s = TR::Compiler->cls.classNameChars(comp(), callsite->_receiverClass, len);
-            heuristicTrace(tracer(),"Virtual call to %s is not overridden in the hierarchy of thisClass %*s\n",tracer()->traceSignature(callsite->_initialCalleeMethod), len, s);
+            heuristicTrace(tracer(),"Virtual call to %s is not overridden in the hierarchy of thisClass %*s\n",tracer()->traceSignature(refinedMethod), len, s);
             }
          else
             {
-            heuristicTrace(tracer(),"Virtual call to %s is not overridden in the hierarchy of thisClass <obsolete class>\n",tracer()->traceSignature(callsite->_initialCalleeMethod));
+            heuristicTrace(tracer(),"Virtual call to %s is not overridden in the hierarchy of thisClass <obsolete class>\n",tracer()->traceSignature(refinedMethod));
             }
          }
 
       TR_VirtualGuardSelection *guard = (fe()->classHasBeenExtended(callsite->_receiverClass)) ?
          new (comp()->trHeapMemory()) TR_VirtualGuardSelection(TR_HierarchyGuard, TR_MethodTest) :
          new (comp()->trHeapMemory()) TR_VirtualGuardSelection(TR_HierarchyGuard, TR_VftTest, callsite->_receiverClass);
-      callsite->addTarget(comp()->trMemory(),inliner(),guard,callsite->_initialCalleeMethod,callsite->_receiverClass,heapAlloc);
+      callsite->addTarget(comp()->trMemory(),inliner(),guard,refinedMethod,callsite->_receiverClass,heapAlloc);
       return true;
       }
    return false;

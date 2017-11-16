@@ -161,16 +161,16 @@ class TR_J9InlinerPolicy : public OMR_InlinerPolicy
       virtual bool tryToInlineTrivialMethod (TR_CallStack* callStack, TR_CallTarget* calltarget);
       static bool isInlineableJNI(TR_ResolvedMethod *method,TR::Node *callNode);
       virtual bool alwaysWorthInlining(TR_ResolvedMethod * calleeMethod, TR::Node *callNode);
+      bool skipFaninDueToConstraints(TR_CallSite *callSite, TR::ResolvedMethodSymbol *callee);
       bool adjustFanInSizeInExceedsSizeThreshold(int bytecodeSize,
                                                       uint32_t& calculatedSize,
                                                       TR_ResolvedMethod* callee,
-                                                      TR_ResolvedMethod* caller,
+                                                      TR_CallSite *callSite,
                                                       int32_t bcIndex);
       void adjustFanInSizeInWeighCallSite(int32_t& weight,
                                                 int32_t size,
-                                                TR_ResolvedMethod* callee,
-                                                TR_ResolvedMethod* caller,
-                                                int32_t bcIndex);
+                                                TR_CallSite *callSite,
+                                                TR_CallTarget *callTarget);
       virtual bool aggressivelyInlineInLoops();
       virtual void determineInliningHeuristic(TR::ResolvedMethodSymbol *callerSymbol);
       virtual void determineAggressionInLoops(TR::ResolvedMethodSymbol *callerSymbol);

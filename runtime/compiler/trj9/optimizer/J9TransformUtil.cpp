@@ -431,6 +431,17 @@ static bool foldFinalFieldsIn(TR_OpaqueClassBlock *clazz, char *className, int32
          return false;
       return true;
       }
+
+   static char *disableAggressiveFolding = feGetEnv("TR_DisableAggressiveStaticFinalFieldFolding");
+   if (!disableAggressiveFolding
+      && isStatic
+      && comp->fej9()->isClassInitialized(clazz))
+      {
+      if (classNameLength >= 16 && !strncmp(className, "java/lang/System", 16))
+         return false;
+      return true;
+      }
+
    return false;
    }
 

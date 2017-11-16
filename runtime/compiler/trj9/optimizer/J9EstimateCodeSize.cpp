@@ -1484,7 +1484,6 @@ TR_J9EstimateCodeSize::realEstimateCodeSize(TR_CallTarget *calltarget, TR_CallSt
                      }
 
                   TR_PrexArgInfo *argInfo = calltarget->_ecsPrexArgInfo;
-
                   if (wasPeekingSuccessfull)
                      {
                      TR_PrexArgInfo::propagateReceiverInfoIfAvailable(methodSymbol, callsite, argInfo, tracer());
@@ -1495,7 +1494,7 @@ TR_J9EstimateCodeSize::realEstimateCodeSize(TR_CallTarget *calltarget, TR_CallSt
                            tracer()->dumpPrexArgInfo(callsite->_ecsPrexArgInfo);
                         }
                      }
-
+                  
                   callsite->_callerBlock = currentInlinedBlock;
                   if (isInlineable(&callStack, callsite))
                      {
@@ -1571,6 +1570,16 @@ TR_J9EstimateCodeSize::realEstimateCodeSize(TR_CallTarget *calltarget, TR_CallSt
 
                   TR_PrexArgInfo *argInfo = calltarget->_ecsPrexArgInfo;
                   callsite->_callerBlock = currentInlinedBlock;
+                  if (wasPeekingSuccessfull)
+                     {
+                     TR_PrexArgInfo::propagateReceiverInfoIfAvailable(methodSymbol, callsite, argInfo, tracer());
+                     if (tracer()->heuristicLevel())
+                        {
+                        alwaysTrace(tracer(), "propagateReceiverInfoIfAvailable :");
+                        if (callsite->_ecsPrexArgInfo)
+                           tracer()->dumpPrexArgInfo(callsite->_ecsPrexArgInfo);
+                        }
+                     }
 
                   if (isInlineable(&callStack, callsite))
                      {
