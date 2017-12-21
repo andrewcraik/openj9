@@ -45,6 +45,7 @@ namespace J9
 class OMR_EXTENSIBLE TransformUtil : public OMR::TransformUtilConnector
    {
 public:
+   static bool foldFinalFieldsIn(TR_OpaqueClassBlock *clazz, char *className, int32_t classNameLength, bool isStatic, TR::Compilation *comp);
 
    static TR::Node *generateArrayElementShiftAmountTrees(
          TR::Compilation *comp,

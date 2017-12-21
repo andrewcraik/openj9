@@ -393,7 +393,7 @@ static void *dereferenceStructPointerChain(void *baseStruct, TR::Node *baseNode,
    return NULL;
    }
 
-static bool foldFinalFieldsIn(TR_OpaqueClassBlock *clazz, char *className, int32_t classNameLength, bool isStatic, TR::Compilation *comp)
+bool J9::TransformUtil::foldFinalFieldsIn(TR_OpaqueClassBlock *clazz, char *className, int32_t classNameLength, bool isStatic, TR::Compilation *comp)
    {
    TR::SimpleRegex *classRegex = comp->getOptions()->getClassesWithFoldableFinalFields();
    if (classRegex)

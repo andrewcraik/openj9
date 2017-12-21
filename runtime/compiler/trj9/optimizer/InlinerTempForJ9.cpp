@@ -24,7 +24,7 @@
 #include "optimizer/Inliner.hpp"
 #include "trj9/optimizer/J9Inliner.hpp"
 #include "trj9/optimizer/J9EstimateCodeSize.hpp"
-
+#include "env/VMAccessCriticalSection.hpp"
 #include "env/KnownObjectTable.hpp"
 #include "compile/OSRData.hpp"
 #include "compile/ResolvedMethod.hpp"
@@ -5007,6 +5007,43 @@ TR_J9InlinerUtil::computePrexInfo(TR_CallTarget *target)
       traceMsg(comp(), "PREX.inl: Done populating prex argInfo for %s %p\n", site->_callNode->getOpCode().getName(), site->_callNode);
 
    target->_prexArgInfo = argInfo;
+   TR_ResolvedMethod *callee = target->_calleeMethod;
+   int32_t classNameLength = callee->classNameLength();
+   if (0 && !callee->isStatic() && classNameLength == 16)
+      {
+      char * className = callee->classNameChars();
+      if (strncmp(className, "java/lang/String", 16) == 0)
+         {
+         TR_PrexArgument *receiverInfo = argInfo->get(0);
+         if (receiverInfo && TR_PrexArgument::knowledgeLevel(receiverInfo) == KNOWN_OBJECT)
+            {
+            bool compEval = true;
+            for (int32_t c = site->_callNode->getNumChildren() -1; c > firstArgIndex; c--)
+               {
+               int32_t argOrdinal = c - firstArgIndex;
+               if (!site->_callNode->getChild(c)->getOpCode().isLoadConst() && TR_PrexArgument::knowledgeLevel(argInfo->get(argOrdinal)) != KNOWN_OBJECT)
+                  {
+                  compEval = false;
+                  break;
+                  }
+               }
+            if (compEval)
+               {
+               //site->removecalltarget(target,tracer(),Trimmed_List_of_Callees);
+               uintptrj_t *objectPointer = comp()->getKnownObjectTable()->getPointerLocation(receiverInfo->getKnownObjectIndex());
+               TR::VMAccessCriticalSection charAtCriticalSection(comp(),
+                                                      TR::VMAccessCriticalSection::tryToAcquireVMAccess);
+               if (charAtCriticalSection.hasVMAccess())
+                  {
+                  int32_t size = comp()->fej9()->getStringUTF8Length(*objectPointer);
+                  char strContents[size+1];
+                  comp()->fej9()->getStringUTF8(*objectPointer, &(strContents[0]), size+1);
+                  TR::DebugCounter::incStaticDebugCounter(comp(), TR::DebugCounter::debugCounterName(comp(), "constantStringMethod/(%s)/(%s)/(%s)", comp()->signature(), callee->signature(comp()->trMemory()), strContents));
+                  }
+               }
+            }
+      }
+   }
    return argInfo;
    }
 
@@ -5898,7 +5935,7 @@ TR_J9InlinerUtil::addTargetIfMethodIsNotOverridenInReceiversHierarchy(TR_Indirec
       {
       TR_OpaqueMethodBlock *found = comp()->fej9()->getResolvedVirtualMethod(callsite->_receiverClass, callsite->_vftSlot);
       if (found)
-         refinedMethod = comp()->fej9()->createResolvedMethod(comp()->trMemory(), found);
+         refinedMethod = comp()->fej9()->createResolvedMethod(comp()->trMemory(), found, callsite->_callerResolvedMethod);
       }
 
    if( !chTable->isOverriddenInThisHierarchy(refinedMethod, callsite->_receiverClass, callsite->_vftSlot, comp()) &&
