@@ -268,7 +268,7 @@ J9::ValuePropagation::constrainRecognizedMethod(TR::Node *node)
    const char *signature = calledMethod->signature(comp()->trMemory(), stackAlloc);
 
    static const char *disableHCRGuards = feGetEnv("TR_DisableHCRGuards");
-   bool transformNonnativeMethodInPlace = disableHCRGuards || comp()->getHCRMode() == TR::none;
+   bool transformNonnativeMethodInPlace = disableHCRGuards || comp()->getHCRMode() == TR::none || node->isFearGeneratingCall();
 
    if (trace())
       traceMsg(comp(), "Trying to compute the result of call to %s on node %p at compile time\n", signature, node);

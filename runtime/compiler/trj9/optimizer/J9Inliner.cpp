@@ -438,6 +438,7 @@ bool TR_InlinerBase::inlineCallTarget(TR_CallStack *callStack, TR_CallTarget *ca
          {
          case TR::java_lang_String_hashCode:
             heuristicTrace(tracer(), "Aborting inlining of calltarget which has a KNOWN_OBJECT receiver and which can be folded by VP");
+            calltarget->_myCallSite->_callNode->setIsFearGeneratingCall(true);
             return false;
          }
       }

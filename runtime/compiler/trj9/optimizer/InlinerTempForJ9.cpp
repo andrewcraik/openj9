@@ -5170,7 +5170,8 @@ void TR_J9InlinerUtil::checkForConstClass(TR_CallTarget *target, TR_InlinerTrace
          {
          case TR::java_lang_String_hashCode:
             heuristicTrace(tracer, "Removing call target for compile-time foldable method");
-            target->_myCallSite->removecalltarget(target,tracer,Recognized_Callee); 
+            target->_myCallSite->removecalltarget(target,tracer,Recognized_Callee);
+            callNode->setIsFearGeneratingCall(true);
             break;
          }
       }
