@@ -3304,7 +3304,6 @@ bool TR_MultipleCallTargetInliner::inlineCallTargets(TR::ResolvedMethodSymbol *c
                   }
 
                heuristicTrace(tracer(),"Searching for Targets returned %d targets for call at node %p. ",callsite->numTargets(),node);
-
                if (callsite->numTargets())
                   {
                   bool flag = false;
@@ -5162,7 +5161,19 @@ void TR_J9InlinerUtil::checkForConstClass(TR_CallTarget *target, TR_InlinerTrace
          } 
          
       } // for each arg
-      
+   if (callNode->getOpCode().isIndirect()
+       && callNode->getNumChildren() > 0
+       && ecsArgInfo->getNumArgs() > 0
+       && TR_PrexArgument::knowledgeLevel(ecsArgInfo->get(0)) == KNOWN_OBJECT)
+      {
+      switch (target->_calleeSymbol->getRecognizedMethod())
+         {
+         case TR::java_lang_String_hashCode:
+            heuristicTrace(tracer, "Removing call target for compile-time foldable method");
+            target->_myCallSite->removecalltarget(target,tracer,Recognized_Callee); 
+            break;
+         }
+      }
    return;
    
    } // checkForConstClass

@@ -427,6 +427,20 @@ bool TR_InlinerBase::inlineCallTarget(TR_CallStack *callStack, TR_CallTarget *ca
    //
    calltarget->_prexArgInfo = TR_PrexArgInfo::enhance(calltarget->_prexArgInfo, argInfo, comp());
    argInfo = getUtil()->computePrexInfo(calltarget);
+   if (calltarget->_myCallSite
+       && calltarget->_myCallSite->_callNode
+       && calltarget->_myCallSite->_callNode->getOpCode().isIndirect()
+       && calltarget->_myCallSite->_callNode->getNumChildren() > 0
+       && argInfo->getNumArgs() > 0
+       && TR_PrexArgument::knowledgeLevel(argInfo->get(0)) == KNOWN_OBJECT)
+      {
+      switch (calltarget->_calleeSymbol->getRecognizedMethod())
+         {
+         case TR::java_lang_String_hashCode:
+            heuristicTrace(tracer(), "Aborting inlining of calltarget which has a KNOWN_OBJECT receiver and which can be folded by VP");
+            return false;
+         }
+      }
 
    if (!comp()->incInlineDepth(calltarget->_calleeSymbol, calltarget->_myCallSite->_callNode->getByteCodeInfo(), calltarget->_myCallSite->_callNode->getSymbolReference()->getCPIndex(), calltarget->_myCallSite->_callNode->getSymbolReference(), !calltarget->_myCallSite->_isIndirectCall, argInfo))
 		{
