@@ -7788,7 +7788,8 @@ TR::CompilationInfoPerThreadBase::wrappedCompile(J9PortLibrary *portLib, void * 
                   }
 
                // Disable NextGenHCR during Startup Phase
-               if (jitConfig->javaVM->phase != J9VM_PHASE_NOT_STARTUP)
+               static char *enableNextGenHCRInStartup = feGetEnv("TR_enableNextGenHCRInStartup");
+               if (jitConfig->javaVM->phase != J9VM_PHASE_NOT_STARTUP && enableNextGenHCRInStartup == NULL)
                   {
                   options->setOption(TR_DisableNextGenHCR);
                   }
