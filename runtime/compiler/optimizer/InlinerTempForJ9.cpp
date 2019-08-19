@@ -3724,11 +3724,27 @@ void TR_MultipleCallTargetInliner::weighCallSite( TR_CallStack * callStack , TR_
                   veryColdBorderFrequency = comp()->getOptions()->getInlinerCGVeryColdBorderFrequency();
 
                if (comp()->trace(OMR::inlining))
-                  heuristicTrace(tracer(),"WeighCallSite: Considering shrinking call %p with frequency %d\n", callsite->_callNode, frequency2);
+                  heuristicTrace(tracer(),"WeighCallSite: Considering shrinking call %p with size %d and frequency %d\n", callsite->_callNode, size, frequency2);
 
                bool largeCompiledCallee = !comp()->getOption(TR_InlineVeryLargeCompiledMethods) &&
                                           isLargeCompiledMethod(calltarget->_calleeMethod, size, frequency2);
-               if (largeCompiledCallee)
+
+               bool hasConstArgs = false;
+               TR::Node *callNode = callsite->_callNode;
+               if (callNode)
+                  {
+                  for (int i = callNode->getFirstArgumentIndex(); !hasConstArgs && i < callNode->getNumChildren(); ++i)
+                     {
+                     TR::Node *arg = callNode->getChild(i);
+                     hasConstArgs = arg->getOpCode().isLoadConst()
+                                    || (arg->getOpCode().hasSymbolReference()
+                                        && arg->getSymbolReference()
+                                        && arg->getSymbolReference()->getSymbol()
+                                        && arg->getSymbolReference()->getSymbol()->isConstObjectRef());
+                     }
+                  }
+
+               if (largeCompiledCallee && !hasConstArgs)
                   {
                   size = size*TR::Options::_inlinerVeryLargeCompiledMethodAdjustFactor;
                   }
@@ -3782,6 +3798,7 @@ void TR_MultipleCallTargetInliner::weighCallSite( TR_CallStack * callStack , TR_
                }
             }
 
+         heuristicTrace(tracer(),"WeighCallSite: For Target %p node %p, size before size mangling %d",calltarget,calltarget->_myCallSite->_callNode,size);
          bool toInline = getPolicy()->tryToInline(calltarget, callStack, true);
          heuristicTrace(tracer(),"WeighCallSite: For Target %p node %p, size after size mangling %d",calltarget,calltarget->_myCallSite->_callNode,size);
 
@@ -4079,9 +4096,25 @@ int32_t TR_MultipleCallTargetInliner::scaleSizeBasedOnBlockFrequency(int32_t byt
 
    bool largeCompiledCallee = !comp()->getOption(TR_InlineVeryLargeCompiledMethods) &&
                               isLargeCompiledMethod(calleeResolvedMethod, bytecodeSize, frequency);
-   if (largeCompiledCallee)
+
+   bool hasConstArgs = false;
+   if (callNode)
+      {
+      for (int i = callNode->getFirstArgumentIndex(); !hasConstArgs && i < callNode->getNumChildren(); ++i)
+         {
+         TR::Node *arg = callNode->getChild(i);
+         hasConstArgs = arg->getOpCode().isLoadConst()
+                        || (arg->getOpCode().hasSymbolReference() 
+                            && arg->getSymbolReference()
+                            && arg->getSymbolReference()->getSymbol()
+                            && arg->getSymbolReference()->getSymbol()->isConstObjectRef());
+         }
+      }
+
+   if (largeCompiledCallee && !hasConstArgs)
       {
       bytecodeSize = bytecodeSize * TR::Options::_inlinerVeryLargeCompiledMethodAdjustFactor;
+      heuristicTrace(tracer(),"exceedsSizeThreshold: largeCompiledCallee without const args - scaled size up to %d\n", bytecodeSize);
       }
    else if (frequency > borderFrequency)
       {
