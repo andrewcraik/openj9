@@ -706,11 +706,14 @@ static const OptimizationStrategy cheapWarmStrategyOpts[] =
    { OMR::localCSE,                                  OMR::IfEnabled                  },  //common up lit pool refs in the same block
    { OMR::deadTreesElimination,                      OMR::IfEnabled                  }, // cleanup at the end
    { OMR::treeSimplification,                        OMR::IfEnabledMarkLastRun       }, // Simplify non-normalized address computations introduced by prefetch insertion
+   { OMR::globalDeadStoreGroup,                                                 },
    { OMR::trivialDeadTreeRemoval,                    OMR::IfEnabled                  }, // final cleanup before opcode expansion
+   { OMR::treeSimplification                                                         },
+   { OMR::treeSimplification                                                         },
    { OMR::jProfilingRecompLoopTest,                  OMR::IfLoops                    },
    { OMR::cheapTacticalGlobalRegisterAllocatorGroup, OMR::IfEnabled                  },
    { OMR::jProfilingValue,                           OMR::MustBeDone                 },
-   { OMR::globalDeadStoreGroup,                                                 },
+   //{ OMR::globalDeadStoreGroup,                                                 },
    { OMR::compactNullChecks,                         OMR::IfEnabled                  }, // cleanup at the end
    { OMR::deadTreesElimination,                      OMR::IfEnabled                  }, // remove dead anchors created by check/store removal
    { OMR::deadTreesElimination,                      OMR::IfEnabled                  }, // remove dead RegStores produced by previous deadTrees pass
