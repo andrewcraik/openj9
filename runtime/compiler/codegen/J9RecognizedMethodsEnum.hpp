@@ -256,6 +256,7 @@
    java_util_concurrent_atomic_Fences_preStoreFence_jlObjectI,
    java_util_concurrent_atomic_Fences_postStorePreLoadFence_jlObjectI,
 
+   java_util_regex_Matcher_init,
    // JSR 166y
    //
    java_util_concurrent_atomic_Fences_orderAccesses,
